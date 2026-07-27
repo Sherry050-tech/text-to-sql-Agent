@@ -110,16 +110,11 @@ if prompt := st.chat_input("Ask a question about the Chinook database"):
 
     append_log(f"Prompt: {prompt}", log_path=log_path)
 
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                response_text = asyncio.run(run_agent_query(prompt, log_path))
-            except Exception as exc:
-                response_text = f"Sorry, I could not process that request. Error: {exc}"
-        st.markdown(response_text)
+    with st.spinner("Thinking..."):
+        try:
+            response_text = asyncio.run(run_agent_query(prompt, log_path))
+        except Exception as exc:
+            response_text = f"Sorry, I could not process that request. Error: {exc}"
 
     st.session_state.conversations[-1]["response"] = response_text
 
