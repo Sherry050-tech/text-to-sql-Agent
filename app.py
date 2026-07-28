@@ -17,8 +17,6 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 st.set_page_config(page_title="Text-to-SQL", page_icon="🗄️", layout="centered")
-st.title("Text-to-SQL")
-st.caption("Ask questions about the Chinook database and get SQL-backed answers.")
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -72,6 +70,8 @@ def create_prompt_log_path(username: str | None = None) -> str:
 
 
 def render_login_ui():
+    st.title("Text-to-SQL")
+    st.caption("Ask questions about the Chinook database and get SQL-backed answers.")
     st.subheader("Sign in to continue")
     st.caption("Register a username and password, or log in with an existing account.")
 
@@ -178,16 +178,21 @@ async def run_agent_query(user_prompt: str, log_path: str) -> dict[str, object]:
 
 if not st.session_state.get("authenticated"):
     render_login_ui()
-    # Row-level authorization (restricting which rows a user can access) is intentionally out of scope here.
     st.stop()
 
-with st.sidebar:
-    st.subheader(f"Signed in as {st.session_state['username']}")
-    if st.button("Logout"):
+top_col1, top_col2 = st.columns([1, 4])
+with top_col1:
+    if st.button("Logout", key="logout_button"):
         st.session_state.authenticated = False
         st.session_state.username = ""
         st.session_state.logs_cleared = False
         st.rerun()
+
+with top_col2:
+    st.caption(f"👤 Signed in as **{st.session_state['username']}**")
+
+st.title("Text-to-SQL")
+st.caption("Ask questions about the Chinook database and get SQL-backed answers.")
 
 if prompt := st.chat_input("Ask a question about the Chinook database"):
     log_path = create_prompt_log_path(st.session_state["username"])
