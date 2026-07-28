@@ -1,14 +1,30 @@
 import asyncio
-import os
 import json
+import os
+import sys
 from datetime import datetime
+
 from google import genai
 from google.genai import types
-from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp.client.session import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".logs")
 os.makedirs(LOG_DIR, exist_ok=True)
+
+
+def clean_schema(schema: object) -> object:
+    """Recursively strip unsupported keys (e.g. additionalProperties) from MCP tool schemas for Gemini."""
+    if isinstance(schema, dict):
+        cleaned = {}
+        for k, v in schema.items():
+            if k in ("additionalProperties", "additional_properties"):
+                continue
+            cleaned[k] = clean_schema(v)
+        return cleaned
+    elif isinstance(schema, list):
+        return [clean_schema(item) for item in schema]
+    return schema
 
 
 def get_prompt_log_path(log_path: str | None = None) -> str:
@@ -64,13 +80,8 @@ def create_gemini_client():
 
 async def main():
     gemini = create_gemini_client()
-    # 1. Define how to start our MCP server
-    server_params = StdioServerParameters(
-        command="python",
-        args=["chinook_mcp.py"]
-    )
+    server_params = StdioServerParameters(command=sys.executable, args=["chinook_mcp.py"])
 
-    # 2. Connect to the MCP Server once for the entire session
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -80,10 +91,7 @@ async def main():
             print("Type 'exit' or 'quit' to end the program.")
             print("==================================================\n")
 
-            # Fetch the tools exposed by the MCP server
             mcp_tools_response = await session.list_tools()
-            
-            # Map MCP tools to Gemini's format
             gemini_tools = []
             for tool in mcp_tools_response.tools:
                 gemini_tools.append(
@@ -92,25 +100,27 @@ async def main():
                             types.FunctionDeclaration(
                                 name=tool.name,
                                 description=tool.description,
-                                parameters=tool.inputSchema
+                                parameters=clean_schema(tool.inputSchema),
                             )
                         ]
                     )
                 )
 
-            # Configure Gemini with the MCP tools
             config = types.GenerateContentConfig(
                 tools=gemini_tools,
                 temperature=0.0,
-                system_instruction="You are a data analyst agent. Use your tools to inspect the database schema, write accurate SQLite queries, execute them, and answer the user's question."
+                system_instruction=(
+                    "You are a data analyst agent. Use your tools to inspect the database schema, "
+                    "write accurate SQLite queries, execute them, and answer the user's question. "
+                    "When a visual would help (for example to compare values, trace a trend, or break down categories), "
+                    "call generate_chart after retrieving data with execute_read_query."
+                ),
             )
 
-            # 3. Interactive Input Loop
             while True:
                 user_prompt = input("\n💬 Ask a question about Chinook DB: ").strip()
                 append_log(f"Prompt: {user_prompt}")
 
-                # Exit condition
                 if user_prompt.lower() in ["exit", "quit"]:
                     print("\n👋 Goodbye!")
                     break
@@ -120,35 +130,36 @@ async def main():
 
                 print("\n🤖 Agent is working...")
 
-                # Create a fresh chat session for each prompt
                 chat = gemini.chats.create(model="gemini-3.5-flash-lite", config=config)
                 response = chat.send_message(user_prompt)
 
-                # Execute the tool-calling loop
                 while response.function_calls:
                     for function_call in response.function_calls:
                         tool_name = function_call.name
                         tool_args = function_call.args
-                        
+
                         print(f"  🔧 Executing: {tool_name}({tool_args})")
                         append_log(f"Function call: {tool_name} | args={json.dumps(tool_args, ensure_ascii=False)}")
-                        
-                        # Call the tool via MCP
+
                         mcp_result = await session.call_tool(tool_name, tool_args)
                         tool_output = mcp_result.content[0].text
                         append_log(f"Function result: {tool_name} | output={tool_output}")
-                        
-                        # Send result back to Gemini
+
+                        try:
+                            payload = json.loads(tool_output) if tool_output.lstrip().startswith("{") else tool_output
+                        except json.JSONDecodeError:
+                            payload = tool_output
+
                         response = chat.send_message(
                             types.Part.from_function_response(
                                 name=tool_name,
-                                response={"result": json.loads(tool_output) if tool_output.startswith("{") else tool_output}
+                                response={"result": payload},
                             )
                         )
 
-                # Output the result
                 print(f"\n✅ Result:\n{response.text}\n")
                 print("-" * 50)
+
 
 if __name__ == "__main__":
     print("Run the chat UI with: streamlit run app.py")
